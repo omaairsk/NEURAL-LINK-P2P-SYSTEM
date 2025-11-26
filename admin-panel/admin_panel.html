@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEURAL LINK // GOD_MODE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS for Real P2P Connection -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --neon-green: #0f0;
+            --neon-red: #f00;
+            --dark-bg: #050505;
+            --panel-bg: rgba(10, 20, 10, 0.85);
+        }
+
+        body {
+            background-color: var(--dark-bg);
+            color: var(--neon-green);
+            font-family: 'Share Tech Mono', monospace;
+            overflow: hidden;
+        }
+
+        /* CRT Scanline Effect */
+        .scanlines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #001100; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #004400; 
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #008800; 
+        }
+
+        .border-neon {
+            border: 1px solid #004400;
+            box-shadow: 0 0 5px #002200;
+        }
+        
+        .text-glow {
+            text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+        }
+
+        .btn-action {
+            transition: all 0.2s;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .btn-action:hover {
+            background-color: rgba(0, 255, 0, 0.1);
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+        }
+        .btn-action:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(1);
+        }
+        .btn-danger:hover {
+            background-color: rgba(255, 0, 0, 0.1);
+            color: #ff5555;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.2);
+        }
+
+        .input-cyber {
+            background: rgba(0, 20, 0, 0.9);
+            border: 1px solid #004400;
+            color: #0f0;
+            font-family: 'Share Tech Mono', monospace;
+            outline: none;
+        }
+        .input-cyber:focus {
+            border-color: #0f0;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .animate-blink {
+            animation: blink 2s infinite;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col relative">
+
+    <!-- CRT Overlay -->
+    <div class="scanlines"></div>
+
+    <!-- Background Canvas for Neural Visualization -->
+    <canvas id="neuralCanvas" class="absolute top-0 left-0 w-full h-full -z-10 opacity-30"></canvas>
+
+    <!-- Header -->
+    <header class="flex justify-between items-center p-4 border-b border-green-900 bg-black/80 z-10 backdrop-blur-sm">
+        <div class="flex items-center gap-4">
+            <div id="statusLight" class="w-3 h-3 bg-red-500 rounded-full"></div>
+            <h1 class="text-2xl font-bold tracking-[0.2em] text-glow">NEURAL_LINK <span class="text-sm opacity-50">// GOD_MODE</span></h1>
+        </div>
+        <div class="flex gap-6 text-sm">
+            <div>ADMIN_ID: <span id="myPeerId" class="text-white select-all cursor-pointer hover:text-green-400" title="Click to Copy">INITIALIZING...</span></div>
+            <div>NET_HASH: <span id="netHash">0.0 TH/s</span></div>
+            <div id="clock">00:00:00</div>
+        </div>
+    </header>
+
+    <!-- Main Layout -->
+    <main class="flex-1 flex overflow-hidden z-10 p-4 gap-4">
+        
+        <!-- LEFT: Active Nodes -->
+        <aside class="w-1/3 flex flex-col border-neon bg-black/60 backdrop-blur-md">
+            <div class="p-3 border-b border-green-900 flex justify-between items-center bg-green-900/10">
+                <h2 class="text-lg font-bold">ACTIVE UPLINKS</h2>
+                <span id="nodeCount" class="text-xs bg-green-900 px-2 py-1 rounded">0 LINKED</span>
+            </div>
+            <div id="nodeList" class="flex-1 overflow-y-auto p-2 space-y-2">
+                <!-- Nodes injected by JS -->
+                <div class="text-xs text-gray-500 p-2 text-center italic" id="emptyState">NO ACTIVE CONNECTIONS</div>
+            </div>
+        </aside>
+
+        <!-- RIGHT: Operations & Logs -->
+        <section class="w-2/3 flex flex-col gap-4">
+            
+            <!-- UPPER: Omni-Log Terminal -->
+            <div class="flex-1 border-neon bg-black/80 flex flex-col relative">
+                <div class="absolute top-0 right-0 p-2 text-xs text-gray-500">Live Telemetry Feed</div>
+                <div id="terminal" class="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 text-gray-300 pb-10">
+                    <div class="text-green-500">>> SYSTEM BOOT SEQUENCE...</div>
+                    <div class="text-green-500">>> INITIALIZING PEERJS PROTOCOL...</div>
+                    <br>
+                    <!-- Logs injected here -->
+                </div>
+            </div>
+
+            <!-- LOWER: Command Deck -->
+            <div class="h-56 border-neon bg-black/80 p-4 grid grid-cols-12 gap-4">
+                
+                <!-- Info/Connect Screen -->
+                <div class="col-span-5 border border-green-900 p-2 relative overflow-hidden flex flex-col gap-2">
+                    <h3 class="text-xs uppercase text-gray-500">Target Analysis / Connection</h3>
+                    
+                    <div class="flex gap-1">
+                        <input type="text" id="targetInput" class="input-cyber w-full p-2 text-sm" placeholder="ENTER TARGET ID...">
+                        <button onclick="connectToTarget()" class="btn-action bg-green-900/50 border border-green-500 text-green-400 px-3 hover:bg-green-500 hover:text-black">LINK</button>
+                    </div>
+
+                    <div id="targetInfo" class="text-sm space-y-1 mt-2 flex-1 overflow-y-auto">
+                        <div class="text-gray-500 text-xs">Waiting for target selection...</div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="col-span-7 grid grid-cols-3 gap-3">
+                    <button id="btnBroadcast" onclick="broadcastMsg()" class="btn-action border border-green-600 text-green-400 hover:text-white flex flex-col items-center justify-center p-2" disabled>
+                        <span class="text-2xl mb-1">📡</span>
+                        <span class="text-xs">Broadcast</span>
+                    </button>
+                    
+                    <button onclick="clearTerminal()" class="btn-action border border-yellow-600 text-yellow-500 hover:text-white flex flex-col items-center justify-center p-2">
+                        <span class="text-2xl mb-1">🧹</span>
+                        <span class="text-xs">Clear Log</span>
+                    </button>
+
+                    <button id="btnKill" onclick="killConnection()" class="btn-action btn-danger border border-red-600 text-red-500 flex flex-col items-center justify-center p-2 bg-red-900/10" disabled>
+                        <span class="text-2xl mb-1">💀</span>
+                        <span class="text-xs">SEVER LINK</span>
+                    </button>
+
+                    <!-- Command Line Input -->
+                    <div class="col-span-3 border border-gray-700 flex items-center px-3 bg-black mt-1">
+                        <span class="text-green-500 mr-2">root@god_mode:~#</span>
+                        <input type="text" id="cmdInput" class="bg-transparent border-none outline-none text-white w-full py-2 font-mono" placeholder="Send direct message..." onkeydown="handleCmd(event)">
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // --- PEERJS CONFIGURATION ---
+        // Matches the React App's configuration
+        const peerConfig = {
+            debug: 1, 
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        };
+
+        let peer = null;
+        let connections = {}; // Store all active connections by PeerID
+        let activeConnectionId = null; // The one currently selected in UI
+
+        // --- DOM ELEMENTS ---
+        const terminal = document.getElementById('terminal');
+        const nodeList = document.getElementById('nodeList');
+        const targetInfo = document.getElementById('targetInfo');
+        const myPeerIdEl = document.getElementById('myPeerId');
+        const statusLight = document.getElementById('statusLight');
+        const btnBroadcast = document.getElementById('btnBroadcast');
+        const btnKill = document.getElementById('btnKill');
+        const emptyState = document.getElementById('emptyState');
+
+        // --- UTILS ---
+        function getTime() { return new Date().toLocaleTimeString('en-US', { hour12: false }); }
+        
+        // --- INITIALIZATION ---
+        function initSystem() {
+            peer = new Peer(undefined, peerConfig);
+
+            peer.on('open', (id) => {
+                myPeerIdEl.innerText = id;
+                statusLight.classList.remove('bg-red-500');
+                statusLight.classList.add('bg-green-500', 'animate-pulse');
+                addLog("SYSTEM", `NODE INITIALIZED. ID: ${id}`, "success");
+            });
+
+            peer.on('connection', (conn) => {
+                handleConnection(conn);
+                addLog("SYSTEM", `INBOUND CONNECTION: ${conn.peer}`, "warn");
+            });
+
+            peer.on('error', (err) => {
+                addLog("ERROR", err.type.toUpperCase(), "error");
+            });
+
+            // Copy ID on click
+            myPeerIdEl.addEventListener('click', () => {
+                navigator.clipboard.writeText(peer.id);
+                addLog("SYSTEM", "ADMIN ID COPIED TO CLIPBOARD", "info");
+            });
+        }
+
+        // --- CONNECTION HANDLING ---
+        function connectToTarget() {
+            const targetId = document.getElementById('targetInput').value.trim();
+            if (!targetId) return;
+            
+            if (connections[targetId]) {
+                addLog("SYSTEM", "ALREADY CONNECTED TO THIS TARGET", "warn");
+                return;
+            }
+
+            addLog("SYSTEM", `INITIATING UPLINK TO: ${targetId}...`, "info");
+            
+            // Connect using JSON serialization to match React App
+            const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
+            handleConnection(conn);
+        }
+
+        function handleConnection(conn) {
+            conn.on('open', () => {
+                // Register connection
+                connections[conn.peer] = conn;
+                activeConnectionId = conn.peer;
+                
+                renderNodeList();
+                updateTargetInfo(conn.peer);
+                updateButtons();
+                
+                addLog("SYSTEM", `UPLINK ESTABLISHED: ${conn.peer}`, "success");
+                
+                // Send handshake from Admin
+                conn.send({
+                    type: 'text',
+                    content: '*** ADMIN NODE CONNECTED: MONITORING ACTIVE ***',
+                    timestamp: getTime()
+                });
+            });
+
+            conn.on('data', (data) => {
+                // Determine user label
+                const userLabel = `USER_${conn.peer.substr(0,4)}`;
+                
+                // Handle different data types from React App
+                if (data.type === 'text') {
+                    addLog(userLabel, data.content, "info");
+                } 
+                else if (data.type === 'file') {
+                    addLog(userLabel, `FILE UPLOAD: ${data.fileName} (${data.fileSize})`, "warn");
+                    // We could render the image/link here if we wanted to be fancy
+                } 
+                else if (data.type === 'voice') {
+                    addLog(userLabel, `VOICE TRANSMISSION RECEIVED`, "warn");
+                }
+                else if (data.type === 'CHUNK') {
+                    // Just log chunk progress to avoid flooding
+                    if(data.current === 0) addLog(userLabel, "STARTING LARGE TRANSFER...", "info");
+                    if(data.current === data.total -1) addLog(userLabel, "TRANSFER COMPLETE", "success");
+                }
+                else {
+                    // Fallback
+                    addLog(userLabel, JSON.stringify(data), "info");
+                }
+            });
+
+            conn.on('close', () => {
+                addLog("SYSTEM", `LINK LOST: ${conn.peer}`, "error");
+                delete connections[conn.peer];
+                if (activeConnectionId === conn.peer) {
+                    activeConnectionId = null;
+                    updateTargetInfo(null);
+                }
+                renderNodeList();
+                updateButtons();
+            });
+
+            conn.on('error', (err) => {
+                addLog("ERROR", `CONN ERROR: ${err}`, "error");
+            });
+        }
+
+        // --- UI UPDATES ---
+        function renderNodeList() {
+            nodeList.innerHTML = '';
+            const ids = Object.keys(connections);
+            document.getElementById('nodeCount').innerText = `${ids.length} LINKED`;
+
+            if (ids.length === 0) {
+                nodeList.appendChild(emptyState);
+                return;
+            }
+
+            ids.forEach(id => {
+                const isActive = id === activeConnectionId;
+                const el = document.createElement('div');
+                el.className = `p-3 border border-green-900 bg-black/40 hover:bg-green-900/30 cursor-pointer transition-all flex justify-between items-center ${isActive ? 'border-green-400 bg-green-900/40' : ''}`;
+                el.onclick = () => {
+                    activeConnectionId = id;
+                    renderNodeList();
+                    updateTargetInfo(id);
+                };
+                
+                el.innerHTML = `
+                    <div>
+                        <div class="font-bold text-green-300 text-sm">NODE_${id.substr(0,5)}</div>
+                        <div class="text-[10px] text-gray-500">${id}</div>
+                    </div>
+                    <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                `;
+                nodeList.appendChild(el);
+            });
+        }
+
+        function updateTargetInfo(peerId) {
+            if (!peerId) {
+                targetInfo.innerHTML = `<div class="text-gray-500 text-xs">Waiting for target selection...</div>`;
+                return;
+            }
+            targetInfo.innerHTML = `
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                    <span class="text-gray-500">ID:</span> <span class="text-white font-mono break-all">${peerId}</span>
+                    <span class="text-gray-500">STATUS:</span> <span class="text-green-400">ONLINE</span>
+                    <span class="text-gray-500">PROTOCOL:</span> <span class="text-white">WebRTC</span>
+                    <span class="text-gray-500">ENCRYPTION:</span> <span class="text-white">AES-128</span>
+                </div>
+                <div class="mt-2 text-[10px] text-green-700 font-mono">
+                    > DATA STREAM ACTIVE<br>
+                    > LATENCY: < 50ms<br>
+                    > PACKET LOSS: 0%
+                </div>
+            `;
+        }
+
+        function updateButtons() {
+            const hasActive = activeConnectionId !== null;
+            btnBroadcast.disabled = !hasActive;
+            btnKill.disabled = !hasActive;
+        }
+
+        function addLog(user, message, type = 'info') {
+            const div = document.createElement('div');
+            let colorClass = 'text-gray-400';
+            let bgClass = '';
+            
+            if (type === 'warn') { colorClass = 'text-yellow-500'; bgClass = 'bg-yellow-900/10'; }
+            if (type === 'error') { colorClass = 'text-red-500'; bgClass = 'bg-red-900/10'; }
+            if (type === 'success') { colorClass = 'text-green-400'; bgClass = 'bg-green-900/10'; }
+
+            div.className = `border-l-2 border-gray-800 pl-2 py-1 font-mono text-xs ${colorClass} ${bgClass} mb-1`;
+            div.innerHTML = `<span class="opacity-50">[${getTime()}]</span> <span class="font-bold text-white">${user}</span> :: ${message}`;
+            
+            terminal.appendChild(div);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        // --- COMMANDS ---
+        function handleCmd(e) {
+            if (e.key === 'Enter') {
+                const msg = e.target.value;
+                if (!msg) return;
+
+                if (activeConnectionId && connections[activeConnectionId]) {
+                    connections[activeConnectionId].send({
+                        type: 'text',
+                        content: `ADMIN: ${msg}`,
+                        timestamp: getTime()
+                    });
+                    addLog("ADMIN", `SENT >> ${msg}`, "success");
+                } else {
+                    addLog("SYSTEM", "NO ACTIVE TARGET SELECTED", "error");
+                }
+                e.target.value = '';
+            }
+        }
+
+        function broadcastMsg() {
+            const msg = prompt("ENTER SYSTEM BROADCAST:");
+            if (!msg) return;
+
+            Object.values(connections).forEach(conn => {
+                conn.send({
+                    type: 'text',
+                    content: `[SYSTEM BROADCAST]: ${msg}`,
+                    timestamp: getTime()
+                });
+            });
+            addLog("ADMIN", `BROADCAST SENT: "${msg}"`, "success");
+        }
+
+        function killConnection() {
+            if (activeConnectionId && connections[activeConnectionId]) {
+                if(confirm(`TERMINATE CONNECTION WITH ${activeConnectionId}?`)) {
+                    connections[activeConnectionId].close();
+                    // UI updates handled by 'close' event listener
+                }
+            }
+        }
+
+        function clearTerminal() {
+            terminal.innerHTML = '<div class="text-green-500">>> CONSOLE CLEARED</div>';
+        }
+
+        // --- ANIMATION ---
+        const canvas = document.getElementById('neuralCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const points = [];
+        for(let i=0; i<40; i++) {
+            points.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                vx: (Math.random() - 0.5) * 0.3,
+                vy: (Math.random() - 0.5) * 0.3
+            });
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#00ff00';
+            ctx.strokeStyle = 'rgba(0, 255, 0, 0.1)';
+
+            for(let i=0; i<points.length; i++) {
+                const p = points[i];
+                p.x += p.vx;
+                p.y += p.vy;
+
+                if(p.x < 0 || p.x > canvas.width) p.vx *= -1;
+                if(p.y < 0 || p.y > canvas.height) p.vy *= -1;
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 1, 0, Math.PI * 2);
+                ctx.fill();
+
+                for(let j=i+1; j<points.length; j++) {
+                    const p2 = points[j];
+                    const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
+                    if(dist < 100) {
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, p.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+
+        // --- STARTUP ---
+        setInterval(() => {
+            document.getElementById('clock').innerText = getTime();
+            // Mock network hash rate just for visuals
+            document.getElementById('netHash').innerText = (Math.random() * 10 + 40).toFixed(1) + " TH/s";
+        }, 1000);
+
+        initSystem();
+        animate();
+
+    </script>
+</body>
+</html>
