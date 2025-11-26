@@ -224,6 +224,19 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        
+        .progress-bar-container {
+            width: 100%;
+            height: 4px;
+            background: #002200;
+            margin-top: 4px;
+            position: relative;
+        }
+        .progress-bar {
+            height: 100%;
+            background: #00ff41;
+            transition: width 0.2s;
+        }
     </style>
 </head>
 <body>
@@ -304,6 +317,7 @@
             const [mobileView, setMobileView] = useState('connect'); 
             const [isRecording, setIsRecording] = useState(false);
             const [isConnecting, setIsConnecting] = useState(false);
+            const [uploadProgress, setUploadProgress] = useState(0);
             
             // Call State
             const [callStatus, setCallStatus] = useState('idle'); // idle, calling, ringing, connected
@@ -319,6 +333,11 @@
             const remoteVideoRef = useRef(null);
             const currentCallRef = useRef(null);
             const connectionTimeoutRef = useRef(null);
+            
+            // Data Handling Refs
+            const fileChunksRef = useRef({});
+            const sendQueueRef = useRef([]); // Queue for outgoing chunks
+            const isSendingRef = useRef(false); // Flag to prevent concurrency
 
             // Audio for effects
             const playSound = (type) => {
@@ -402,10 +421,6 @@
                     } else if (err.type === 'disconnected') {
                          setStatus('NET LOSS. ATTEMPTING RECONNECT...');
                          peer.reconnect();
-                    } else if (err.type === 'network') {
-                        setStatus('ERROR: NETWORK CONNECTION LOST');
-                    } else if (err.type === 'browser-incompatible') {
-                        setStatus('ERROR: BROWSER NOT SUPPORTED');
                     } else {
                         setStatus(`ERROR: ${err.type ? err.type.toUpperCase() : 'UNKNOWN'}`);
                     }
@@ -426,7 +441,6 @@
                 return () => { if (peerRef.current) peerRef.current.destroy(); };
             }, [initializePeer]);
 
-            // Stream Handling Effects with Explicit Play for Android
             useEffect(() => {
                 if (localVideoRef.current && localStream) {
                     localVideoRef.current.srcObject = localStream;
@@ -476,24 +490,129 @@
                 });
             };
 
+            // --- SEND QUEUE PROCESSOR ---
+            // This ensures we don't flood the connection
+            const processSendQueue = async () => {
+                if (isSendingRef.current || sendQueueRef.current.length === 0) return;
+                
+                isSendingRef.current = true;
+                const { payload, onProgress } = sendQueueRef.current.shift();
+
+                try {
+                    if (conn && conn.open) {
+                        conn.send(payload);
+                        // Small delay to yield to the event loop and allow buffering
+                        await new Promise(resolve => setTimeout(resolve, 10)); 
+                        if (onProgress) onProgress();
+                    }
+                } catch (e) {
+                    console.error("Send failed", e);
+                    // Optionally requeue or drop
+                }
+
+                isSendingRef.current = false;
+                if (sendQueueRef.current.length > 0) {
+                    processSendQueue(); // Continue processing
+                }
+            };
+
+            const queueSend = (payload, onProgress) => {
+                sendQueueRef.current.push({ payload, onProgress });
+                processSendQueue();
+            };
+
+            // --- SAFE SEND FUNCTION (CHUNKING) ---
+            const sendSmart = async (data) => {
+                const CHUNK_SIZE = 4096; // 4KB - Extremely safe limit for all browsers
+                const content = data.content || '';
+                
+                // If it's small enough, send directly (but still queue it)
+                if (content.length < CHUNK_SIZE) {
+                    queueSend(data);
+                    setMessages(prev => [...prev, { ...data, self: true }]);
+                    playSound('send');
+                    return;
+                }
+
+                // Large file: Chunk it
+                const transferId = Math.random().toString(36).substr(2, 9);
+                const totalChunks = Math.ceil(content.length / CHUNK_SIZE);
+                
+                setUploadProgress(0);
+                
+                // Send metadata first (optional, but we handle it in last chunk for simplicity)
+                
+                // Chunk loop
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = start + CHUNK_SIZE;
+                    const chunk = content.slice(start, end);
+                    
+                    const chunkPayload = {
+                        type: 'CHUNK',
+                        id: transferId,
+                        current: i,
+                        total: totalChunks,
+                        data: chunk,
+                        // Attach metadata only to the final chunk
+                        meta: i === totalChunks - 1 ? { ...data, content: null } : null
+                    };
+
+                    // Queue the chunk
+                    queueSend(chunkPayload, () => {
+                        // Update progress only for the sender UI
+                        if (i % 10 === 0 || i === totalChunks - 1) {
+                            const pct = Math.round(((i + 1) / totalChunks) * 100);
+                            setUploadProgress(pct);
+                            if (pct === 100) setTimeout(() => setUploadProgress(0), 1000);
+                        }
+                    });
+                }
+
+                // Optimistically show message in UI
+                setMessages(prev => [...prev, { ...data, self: true }]);
+                playSound('send');
+            };
+
             const handleIncomingData = (data) => {
-                // Robust parsing to handle potential stringified JSON
+                // Handle CHUNKED data
+                if (data.type === 'CHUNK') {
+                    if (!fileChunksRef.current[data.id]) {
+                        fileChunksRef.current[data.id] = new Array(data.total);
+                    }
+                    
+                    fileChunksRef.current[data.id][data.current] = data.data;
+
+                    if (data.current === data.total - 1) {
+                        // Reconstruct
+                        const fullContent = fileChunksRef.current[data.id].join('');
+                        const originalMsg = { 
+                            ...data.meta, 
+                            content: fullContent, 
+                            self: false 
+                        };
+                        
+                        setMessages(prev => [...prev, originalMsg]);
+                        playSound('receive');
+                        delete fileChunksRef.current[data.id];
+                    }
+                    return; 
+                }
+
+                // Handle Legacy/Direct small messages
                 let parsedData = data;
                 if (typeof data === 'string') {
                     try {
                         parsedData = JSON.parse(data);
-                    } catch (e) { console.error("Parse error", e); return; }
+                    } catch (e) { return; }
                 }
-                
                 setMessages(prev => [...prev, { ...parsedData, self: false }]);
                 playSound('receive');
             };
 
             const connectToPeer = () => {
                 const cleanId = targetPeerId.trim();
-                
                 if (!cleanId || !peerRef.current) return;
-                
                 if (cleanId === myPeerId) {
                     setStatus("ERROR: CANNOT LINK TO SELF");
                     setTimeout(() => setStatus("SYSTEM ONLINE. WAITING..."), 2000);
@@ -506,7 +625,7 @@
                 try {
                     const connection = peerRef.current.connect(cleanId, {
                         reliable: true,
-                        serialization: 'json'
+                        serialization: 'json' // We handle chunking manually now
                     });
                     
                     if (!connection) {
@@ -532,25 +651,14 @@
                 }
             };
 
-            // --- Call Logic (Updated for Android) ---
             const startCall = async () => {
                 if (!conn) return;
-
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    alert("CALL FAILED: Camera access blocked (Requires HTTPS/Localhost).");
+                    alert("CALL FAILED: Camera access blocked. HTTPS Required.");
                     return;
                 }
-
                 try {
-                    const constraints = { 
-                        audio: true, 
-                        video: { 
-                            facingMode: 'user',
-                            width: { ideal: 640 },
-                            height: { ideal: 480 }
-                        } 
-                    };
-                    
+                    const constraints = { audio: true, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } };
                     const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setLocalStream(stream);
                     setCallStatus('calling');
@@ -562,33 +670,22 @@
                         setRemoteStream(remoteStream);
                         setCallStatus('connected');
                     });
-                    
                     call.on('close', () => endCall());
-                    call.on('error', (e) => { console.error("Call Error", e); endCall(); });
+                    call.on('error', () => endCall());
                 } catch (err) {
-                    console.error("Media Error:", err);
-                    alert(`CAMERA ACCESS FAILED: ${err.message}. Check permissions.`);
+                    alert(`CAMERA ERROR: ${err.message}`);
                     endCall();
                 }
             };
 
             const answerCall = async () => {
                 if (!incomingCall) return;
-
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    alert("ANSWER FAILED: Camera access blocked (Requires HTTPS/Localhost).");
+                    alert("ANSWER FAILED: Camera access blocked. HTTPS Required.");
                     return;
                 }
-
                 try {
-                     const constraints = { 
-                        audio: true, 
-                        video: { 
-                            facingMode: 'user',
-                            width: { ideal: 640 },
-                            height: { ideal: 480 }
-                        } 
-                    };
+                     const constraints = { audio: true, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } };
                     const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setLocalStream(stream);
                     
@@ -599,27 +696,22 @@
                     incomingCall.on('stream', (remoteStream) => {
                         setRemoteStream(remoteStream);
                     });
-                    
                     incomingCall.on('close', () => endCall());
                 } catch (err) {
-                    console.error("Answer Error:", err);
-                    alert(`CAMERA ACCESS FAILED: ${err.message}. Check permissions.`);
+                    alert(`CAMERA ERROR: ${err.message}`);
                     endCall();
                 }
             };
 
             const endCall = () => {
                 if (currentCallRef.current) currentCallRef.current.close();
-                if (localStream) {
-                    localStream.getTracks().forEach(track => track.stop());
-                }
+                if (localStream) localStream.getTracks().forEach(track => track.stop());
                 setLocalStream(null);
                 setRemoteStream(null);
                 setIncomingCall(null);
                 setCallStatus('idle');
             };
 
-            // --- Messaging Logic ---
             const sendMessage = (e) => {
                 e && e.preventDefault();
                 if (!inputMsg.trim() || !conn) return;
@@ -630,25 +722,21 @@
                     timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
                 };
 
-                conn.send(msgData);
-                setMessages(prev => [...prev, { ...msgData, self: true }]);
+                sendSmart(msgData);
                 setInputMsg('');
-                playSound('send');
             };
 
             const handleFileUpload = (e) => {
                 const file = e.target.files[0];
                 if (!file || !conn) return;
                 
-                // Stability Limit: 2.5MB max for reliable P2P JSON transmission
-                if (file.size > 2.5 * 1024 * 1024) {
-                    alert("FILE TOO LARGE. STABILITY LIMIT IS 2.5MB.");
-                    return;
+                // Limit to 200MB to prevent browser crash, but "Unlimited" logic applies to transport
+                if (file.size > 200 * 1024 * 1024) {
+                    alert("BROWSER SAFETY WARNING: Files > 200MB may crash the tab. Proceeding anyway.");
                 }
 
                 const reader = new FileReader();
                 reader.onload = (event) => {
-                    // Improved File Type Detection
                     let fileType = 'application';
                     if (file.type.startsWith('image/')) fileType = 'image';
                     else if (file.type.startsWith('audio/')) fileType = 'audio';
@@ -663,9 +751,7 @@
                         fileSize: (file.size / 1024).toFixed(1) + 'KB',
                         timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
                     };
-                    conn.send(msgData);
-                    setMessages(prev => [...prev, { ...msgData, self: true }]);
-                    playSound('send');
+                    sendSmart(msgData);
                 };
                 reader.readAsDataURL(file);
             };
@@ -698,19 +784,14 @@
                                     content: base64Audio,
                                     timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
                                 };
-                                if (conn) {
-                                    conn.send(msgData);
-                                    setMessages(prev => [...prev, { ...msgData, self: true }]);
-                                    playSound('send');
-                                }
+                                if (conn) sendSmart(msgData);
                             };
                             stream.getTracks().forEach(track => track.stop());
                         };
-
                         mediaRecorder.start();
                         setIsRecording(true);
                     } catch (err) {
-                        alert("MICROPHONE ERROR: Check permissions.");
+                        alert("MICROPHONE ERROR");
                     }
                 }
             };
@@ -883,6 +964,16 @@
                                 ))}
                                 <div ref={messagesEndRef} />
                             </div>
+
+                            {/* Upload Progress Bar */}
+                            {uploadProgress > 0 && (
+                                <div className="px-3 pb-1 bg-black/80 border-t border-green-900">
+                                    <div className="text-[10px] text-green-500 mb-1">ENCRYPTING & UPLOADING... {uploadProgress}%</div>
+                                    <div className="progress-bar-container">
+                                        <div className="progress-bar" style={{width: `${uploadProgress}%`}}></div>
+                                    </div>
+                                </div>
+                            )}
 
                             {/* Input Area */}
                             <div className="p-2 md:p-3 border-t border-green-900 bg-black/80 shrink-0">
