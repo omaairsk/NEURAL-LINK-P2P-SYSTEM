@@ -430,7 +430,6 @@
             useEffect(() => {
                 if (localVideoRef.current && localStream) {
                     localVideoRef.current.srcObject = localStream;
-                    // Android needs explicit play after srcObject is set
                     localVideoRef.current.play().catch(e => console.log("Auto-play blocked (local)", e));
                 }
             }, [localStream, callStatus]);
@@ -438,7 +437,6 @@
             useEffect(() => {
                 if (remoteVideoRef.current && remoteStream) {
                     remoteVideoRef.current.srcObject = remoteStream;
-                    // Android needs explicit play after srcObject is set
                     remoteVideoRef.current.play().catch(e => console.log("Auto-play blocked (remote)", e));
                 }
             }, [remoteStream, callStatus]);
@@ -479,7 +477,15 @@
             };
 
             const handleIncomingData = (data) => {
-                setMessages(prev => [...prev, { ...data, self: false }]);
+                // Robust parsing to handle potential stringified JSON
+                let parsedData = data;
+                if (typeof data === 'string') {
+                    try {
+                        parsedData = JSON.parse(data);
+                    } catch (e) { console.error("Parse error", e); return; }
+                }
+                
+                setMessages(prev => [...prev, { ...parsedData, self: false }]);
                 playSound('receive');
             };
 
@@ -530,14 +536,12 @@
             const startCall = async () => {
                 if (!conn) return;
 
-                // CHECK FOR SECURE CONTEXT HERE INSTEAD OF ON LOAD
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    alert("CALL FAILED: Camera access is blocked. This app requires a secure connection (HTTPS) or Localhost.");
+                    alert("CALL FAILED: Camera access blocked (Requires HTTPS/Localhost).");
                     return;
                 }
 
                 try {
-                    // Mobile constraints: 'facingMode: user' ensures front camera
                     const constraints = { 
                         audio: true, 
                         video: { 
@@ -571,9 +575,8 @@
             const answerCall = async () => {
                 if (!incomingCall) return;
 
-                 // CHECK FOR SECURE CONTEXT HERE TOO
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    alert("ANSWER FAILED: Camera access is blocked. HTTPS required.");
+                    alert("ANSWER FAILED: Camera access blocked (Requires HTTPS/Localhost).");
                     return;
                 }
 
@@ -636,13 +639,21 @@
             const handleFileUpload = (e) => {
                 const file = e.target.files[0];
                 if (!file || !conn) return;
-                if (file.size > 5 * 1024 * 1024) {
-                    alert("WARNING: FILE TOO LARGE. LIMIT 5MB.");
+                
+                // Stability Limit: 2.5MB max for reliable P2P JSON transmission
+                if (file.size > 2.5 * 1024 * 1024) {
+                    alert("FILE TOO LARGE. STABILITY LIMIT IS 2.5MB.");
                     return;
                 }
+
                 const reader = new FileReader();
                 reader.onload = (event) => {
-                    const fileType = file.type.split('/')[0];
+                    // Improved File Type Detection
+                    let fileType = 'application';
+                    if (file.type.startsWith('image/')) fileType = 'image';
+                    else if (file.type.startsWith('audio/')) fileType = 'audio';
+                    else if (file.type.startsWith('video/')) fileType = 'video';
+                    
                     const msgData = {
                         type: 'file',
                         fileType: fileType, 
