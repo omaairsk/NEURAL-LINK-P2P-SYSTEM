@@ -145,12 +145,12 @@
             font-weight: bold;
         }
 
-        /* Video Call Styles */
+        /* Video Call Styles - Mobile Optimized */
         .video-overlay {
-            position: absolute;
+            position: fixed; /* Fixed to cover everything */
             inset: 0;
-            background: rgba(0,0,0,0.9);
-            z-index: 50;
+            background: #000;
+            z-index: 9999;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -160,42 +160,45 @@
             position: relative;
             width: 100%;
             height: 100%;
-            max-width: 800px;
-            max-height: 600px;
             display: flex;
             align-items: center;
             justify-content: center;
+            background: #000;
         }
         .remote-video {
             width: 100%;
             height: 100%;
-            object-fit: cover;
-            border: 1px solid #00ff41;
-            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+            object-fit: cover; /* Fill screen on mobile */
         }
         .local-video {
             position: absolute;
-            bottom: 20px;
+            top: 20px;
             right: 20px;
-            width: 120px;
-            height: 90px;
+            width: 100px;
+            height: 140px;
             object-fit: cover;
-            border: 1px solid #00ff41;
+            border: 2px solid #00ff41;
             background: #000;
             z-index: 60;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.3);
         }
         .call-controls {
             position: absolute;
-            bottom: 20px;
+            bottom: 40px;
             left: 50%;
             transform: translateX(-50%);
             display: flex;
             gap: 20px;
             z-index: 60;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-radius: 30px;
+            border: 1px solid rgba(0,255,65,0.3);
         }
         .call-btn-circle {
-            width: 50px;
-            height: 50px;
+            width: 60px;
+            height: 60px;
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -203,6 +206,10 @@
             border: 2px solid;
             cursor: pointer;
             transition: all 0.2s;
+            background: rgba(0,0,0,0.8);
+        }
+        .call-btn-circle:active {
+            transform: scale(0.9);
         }
         
         .loader {
@@ -351,7 +358,6 @@
                     peerRef.current.destroy();
                 }
 
-                // Config with more STUN servers for better reliability
                 const peer = new Peer(undefined, {
                     debug: 1, 
                     config: {
@@ -420,16 +426,20 @@
                 return () => { if (peerRef.current) peerRef.current.destroy(); };
             }, [initializePeer]);
 
-            // Stream Handling Effects
+            // Stream Handling Effects with Explicit Play for Android
             useEffect(() => {
                 if (localVideoRef.current && localStream) {
                     localVideoRef.current.srcObject = localStream;
+                    // Android needs explicit play after srcObject is set
+                    localVideoRef.current.play().catch(e => console.log("Auto-play blocked (local)", e));
                 }
             }, [localStream, callStatus]);
 
             useEffect(() => {
                 if (remoteVideoRef.current && remoteStream) {
                     remoteVideoRef.current.srcObject = remoteStream;
+                    // Android needs explicit play after srcObject is set
+                    remoteVideoRef.current.play().catch(e => console.log("Auto-play blocked (remote)", e));
                 }
             }, [remoteStream, callStatus]);
 
@@ -488,7 +498,6 @@
                 setStatus(`SEARCHING: ${cleanId.substr(0,5)}...`);
                 
                 try {
-                    // Force reliable connection and JSON serialization for better compatibility
                     const connection = peerRef.current.connect(cleanId, {
                         reliable: true,
                         serialization: 'json'
@@ -502,7 +511,6 @@
 
                     setupConnection(connection);
 
-                    // Safety timeout
                     connectionTimeoutRef.current = setTimeout(() => {
                         if (!connection.open) {
                             setStatus("TIMEOUT. CHECK ID & RETRY.");
@@ -518,11 +526,28 @@
                 }
             };
 
-            // --- Call Logic ---
+            // --- Call Logic (Updated for Android) ---
             const startCall = async () => {
                 if (!conn) return;
+
+                // CHECK FOR SECURE CONTEXT HERE INSTEAD OF ON LOAD
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    alert("CALL FAILED: Camera access is blocked. This app requires a secure connection (HTTPS) or Localhost.");
+                    return;
+                }
+
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    // Mobile constraints: 'facingMode: user' ensures front camera
+                    const constraints = { 
+                        audio: true, 
+                        video: { 
+                            facingMode: 'user',
+                            width: { ideal: 640 },
+                            height: { ideal: 480 }
+                        } 
+                    };
+                    
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setLocalStream(stream);
                     setCallStatus('calling');
                     
@@ -535,18 +560,33 @@
                     });
                     
                     call.on('close', () => endCall());
-                    call.on('error', (e) => { console.error(e); endCall(); });
+                    call.on('error', (e) => { console.error("Call Error", e); endCall(); });
                 } catch (err) {
                     console.error("Media Error:", err);
-                    alert("FAILED TO ACCESS CAMERA/MIC. PERMISSION DENIED?");
+                    alert(`CAMERA ACCESS FAILED: ${err.message}. Check permissions.`);
                     endCall();
                 }
             };
 
             const answerCall = async () => {
                 if (!incomingCall) return;
+
+                 // CHECK FOR SECURE CONTEXT HERE TOO
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    alert("ANSWER FAILED: Camera access is blocked. HTTPS required.");
+                    return;
+                }
+
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                     const constraints = { 
+                        audio: true, 
+                        video: { 
+                            facingMode: 'user',
+                            width: { ideal: 640 },
+                            height: { ideal: 480 }
+                        } 
+                    };
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     setLocalStream(stream);
                     
                     incomingCall.answer(stream);
@@ -560,6 +600,7 @@
                     incomingCall.on('close', () => endCall());
                 } catch (err) {
                     console.error("Answer Error:", err);
+                    alert(`CAMERA ACCESS FAILED: ${err.message}. Check permissions.`);
                     endCall();
                 }
             };
@@ -658,7 +699,7 @@
                         mediaRecorder.start();
                         setIsRecording(true);
                     } catch (err) {
-                        alert("MICROPHONE ERROR");
+                        alert("MICROPHONE ERROR: Check permissions.");
                     }
                 }
             };
@@ -679,6 +720,11 @@
             };
 
             const resetSystem = () => {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    setLocalStream(null);
+                }
+                endCall();
                 setConn(null);
                 setMessages([]);
                 setTargetPeerId('');
@@ -719,17 +765,21 @@
                         </div>
                     )}
 
-                    {/* VIDEO CALL OVERLAY */}
+                    {/* VIDEO CALL OVERLAY - Mobile Optimized */}
                     {(callStatus === 'connected' || callStatus === 'calling') && (
                         <div className="video-overlay">
                             <div className="video-container">
-                                {callStatus === 'calling' && <div className="absolute text-green-500 animate-pulse text-xl font-bold z-10">ESTABLISHING UPLINK...</div>}
+                                {callStatus === 'calling' && (
+                                    <div className="absolute text-green-500 animate-pulse text-xl font-bold z-10 text-center px-4">
+                                        ESTABLISHING UPLINK...<br/><span className="text-xs text-green-700">Waiting for remote stream</span>
+                                    </div>
+                                )}
                                 <video ref={remoteVideoRef} autoPlay playsInline className="remote-video bg-black/50" />
                                 <video ref={localVideoRef} autoPlay playsInline muted className="local-video" />
                                 
                                 <div className="call-controls">
                                     <button onClick={endCall} className="call-btn-circle bg-red-900/80 border-red-500 text-red-500 hover:bg-red-600 hover:text-black">
-                                        <IconPhoneOff />
+                                        <IconPhoneOff size={32} />
                                     </button>
                                 </div>
                             </div>
